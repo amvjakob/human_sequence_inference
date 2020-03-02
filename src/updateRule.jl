@@ -68,7 +68,7 @@ function weightedHarmonicMean(arr, w)
     n = length(arr)
     @assert(length(w) == n)
     for i in 1 : n
-        @inbounds s += w[i] * inv(a[i])
+        @inbounds s += w[i] * inv(arr[i])
     end
     return sum(w) / s
 end
@@ -82,16 +82,23 @@ function perfect()
         return alpha0 + allTransitions
     end
 
-    return UpdateRule(() -> nothing, update)
+    return UpdateRule((alpha0) -> nothing, update)
 end
 
 ### Leaky integration
 function leaky(w)
 
     function update(t, transitions, alpha0)
+        N, Nm = size(transitions)[1:2]
+
         # first we weigh each transition by how far in the past it is
         decay = exp.(-1.0 / w * (t:-1:1))
-        weightedTransitions = decay .* transitions
+        weightedTransitions = zeros((N, Nm, t))
+        for i = 1:N
+            for j = 1:Nm
+                weightedTransitions[i,j,:] = transitions[i,j,:] .* decay
+            end
+        end
 
         # update to Dirichlet prior is simply
         # adding the weighted occurences to alpha
@@ -99,7 +106,7 @@ function leaky(w)
         return alpha0 + allTransitions
     end
 
-    return UpdateRule(() -> nothing, update)
+    return UpdateRule((alpha0) -> nothing, update)
 end
 
 ### Variational SMiLe
@@ -110,16 +117,19 @@ function varSMiLe(m)
     nu = nothing
 
     function init(alpha0)
-        # shape should be (2, (2, 2^m)) (m = window length)
+        # shape should be (2, 2, 2^m) (m = window length)
         # shape[1] == 2: for chi_{(0)} or chi_{(t)}
-        # shape[2][1] == 2: for value of x_t (binary signal)
-        # shape[2][2] == 2^m: for every possible sequence of length m before x_t
-        chi = fill(alpha0, 2)
+        # shape[2] == 2: for value of x_t (binary signal)
+        # shape[3] == 2^m: for every possible sequence of length m before x_t
+        chi = zeros((2, size(alpha0)...))
+        for i in 1:2
+            chi[i,:,:] = deepcopy(alpha0)
+        end
 
-        # shape should be (2, (2^m)) (m = window length)
+        # shape should be (2, 2^m) (m = window length)
         # shape[1] == 2: for nu_{(0)} or nu_{(t)}
-        # shape[2][1] == 2^m: for every possible sequence of length m before x_t
-        nu = fill(zeros(size(alpha0)[2]), 2)
+        # shape[2] == 2^m: for every possible sequence of length m before x_t
+        nu = zeros((2, size(alpha0)[2]))
     end
 
     # update rule
@@ -130,18 +140,18 @@ function varSMiLe(m)
         idx = trans[2]
 
         # compute surprise and modulation factor gamma
-        sgm = computeSGM(xt, chi[1][:,idx], nu[1][idx],
-                             chi[2][:,idx], nu[2][idx])
+        sgm = computeSGM(xt, chi[1,:,idx], nu[1,idx],
+                             chi[2,:,idx], nu[2,idx])
         gamma = computeGamma(sgm, m)
 
         # update chi and nu
-        chi[2][:,idx] = (1 - gamma) * chi[2][:,idx] + gamma * chi[1][:,idx]
-        chi[2][xt+1,idx] += 1
+        chi[2,:,idx] = (1 - gamma) .* chi[2,:,idx] + gamma .* chi[1,:,idx]
+        chi[2,xt+1,idx] += 1
 
-        nu[2][idx] = (1 - gamma) * nu[2][idx] + gamma * nu[1][idx] + 1
+        nu[2,idx] = (1 - gamma) * nu[2,idx] + gamma * nu[1,idx] + 1
 
         # compute alpha to return
-        return chi[2] .+ 1.0
+        return chi[2,:,:] .+ 1.0
     end
 
     return UpdateRule(init, update)
@@ -158,18 +168,23 @@ function particleFiltering(m,N,Nthrs)
     w = nothing
 
     function init(alpha0)
-        # shape should be (2, N, (2, 2^m)) (m = window length)
+        # shape should be (2, N, 2, 2^m) (m = window length)
         # shape[1] == 2: for chi_{(0)} or chi_{(t)}
         # shape[2] == N: for every particle i in 1:N
-        # shape[3][1] == 2: for value of x_t (binary signal)
-        # shape[3][2] == 2^m: for every possible sequence of length m before x_t
-        chi = fill(alpha0, (2,N))
+        # shape[3] == 2: for value of x_t (binary signal)
+        # shape[4] == 2^m: for every possible sequence of length m before x_t
+        chi = zeros((2, N, size(alpha0)...))
+        for i in 1:2
+            for j in 1:N
+                chi[i,j,:,:] = deepcopy(alpha0)
+            end
+        end
 
-        # shape should be (2, N, (2^m)) (m = window length)
+        # shape should be (2, N, 2^m) (m = window length)
         # shape[1] == 2: for nu_{(0)} or nu_{(t)}
         # shape[2] == N: for every particle i in 1:N
-        # shape[3][1] == 2^m: for every possible sequence of length m before x_t
-        nu = fill(zeros(size(alpha0)[2]), (2,N))
+        # shape[3] == 2^m: for every possible sequence of length m before x_t
+        nu = zeros((2, N, size(alpha0)[2]))
 
         # shape should be (N,)
         # shape[1] == N: for every particle i in 1:N
@@ -182,7 +197,7 @@ function particleFiltering(m,N,Nthrs)
         n = shape[1]
 
         # calc thetas
-        thetas = (alpha - 1.0) ./ (sum(alpha) - n)
+        thetas = (alpha .- 1.0) ./ (sum(alpha) - n)
 
         # calc probability
         return dirichletProb(thetas, alpha .+ 1 + oneAtPos((xt + 1), shape))
@@ -196,13 +211,19 @@ function particleFiltering(m,N,Nthrs)
         idx = trans[2]
 
         # compute surprises and gamma
-        sgms = computeSGM.(xt, chi[1,:][:,idx], nu[1,:][idx],
-                               chi[2,:][:,idx], nu[2,:][idx])
+        sgms = zeros(N)
+        for i in 1:N
+            sgms[i] = computeSGM(xt, chi[1,i,:,idx], nu[1,i,idx],
+                                     chi[2,i,:,idx], nu[2,i,idx])
+        end
         sgm = weightedHarmonicMean(sgms, w)
         gamma = computeGamma(sgm, m)
 
         # compute Bayesian update weights
-        probXByParticle = probXGivenAlpha.(xt, chi[2,:][:,idx] .+ 1)
+        probXByParticle = ones(N)
+        for i in 1:N
+            probXByParticle[i] = probXGivenAlpha(xt, chi[2,i,:,idx] .+ 1)
+        end
         wB = probXByParticle ./ sum(w .* probXByParticle)
 
         # update weights
@@ -215,22 +236,25 @@ function particleFiltering(m,N,Nthrs)
 
         # compute N_eff
         Neff = inv(sum(w .^ 2))
-        if Neff < Nthrs:
+        if Neff < Nthrs
             # resample h
             h = sample()
+        end
 
         # update chi and nu
-        # if h[i] == 0, use (t), else use (0)
-        chi[2,:][:,idx] = (1 .- h) .* chi[2,:][:,idx] .+ h .* chi[1,:][:,idx]
-        chi[2,:][xt+1,idx] .+= 1
+        for i in 1:N
+            # if h[i] == 0, use (t), else use (0)
+            chi[2,i,:,idx] = (1 - h[i]) .* chi[2,i,:,idx] .+ h[i] * chi[1,i,:,idx]
+            chi[2,i,xt+1,idx] += 1
 
-        nu[2,:][idx] = (1 .- h) .* nu[2,:][idx] .+ h .* nu[1,:][idx] .+ 1
+            nu[2,i,idx] = (1 - h[i]) .* nu[2,i,idx] .+ h[i] * nu[1,i,idx] .+ 1
+        end
 
         # compute alpha to return
         # todo: return new distribution?
         # can't return alpha values since we have a
         # weighted sum of Dirichlet distributions
-        return alpha0
+        return mean(chi[2,:,:,:], dims = 1)
     end
 
     return UpdateRule(init, update)
