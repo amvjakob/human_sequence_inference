@@ -19,6 +19,9 @@ function decode(seq, m, alpha0, rule::UpdateRule)
     alpha = ones(2, 2^m, len)
     alpha[:,:,1] = alpha0
 
+    # init update rule
+    rule.init(alpha0)
+
     # decode sequence
     transitions = zeros(2, d, len)
     for t in 1:len
@@ -35,10 +38,10 @@ function decode(seq, m, alpha0, rule::UpdateRule)
             # add transition to state x_t
             idx = seqToIdx(seq[t-m:t-1])
             transitions[seq[t]+1, idx, t] += 1
-
-            # update alpha
-            alpha[:,:,t] = rule.update(t, transitions[:,:,1:t], alpha0)
         end
+
+        # update alpha
+        alpha[:,:,t] = rule.update(t, transitions[:,:,1:t], alpha0)
     end
 
     return alpha
