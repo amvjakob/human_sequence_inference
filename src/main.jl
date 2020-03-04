@@ -4,17 +4,14 @@ include("updateRule.jl")
 
 len = 1000
 m = 5
-alpha0 = ones(2, 2^m)
-#rule = perfect()
-#rule = leaky(200)
-rule = varSMiLe(0.1)
-#rule = particleFiltering(5, 10, 10)
+alpha_0 = ones(2, 2^m)
+rule = perfect()
+#rule = leaky(10)
+#rule = varSMiLe(3.6)
+#rule = particleFiltering(0.2, 10, 2)
 
 seq = generateSeq(len)
-alphaDecoded = decode(seq, m, alpha0, rule)
+decode(seq, m, alpha_0, rule)
 
 # show result
-@show(alphaDecoded[:,:,end])
-
-# dirichlet
-# dir = Distributions.Dirichlet(alphaDecoded[:,:,end])
+@show(rule.params())
