@@ -11,7 +11,7 @@ mutable struct UpdateRule
     # or just the current column
     updateAll::Bool
 
-    # function that initializes up inital parameters
+    # function that initializes inital parameters
     init
 
      # function that updates the current parameters
@@ -19,6 +19,9 @@ mutable struct UpdateRule
 
     # function that returns the current parameters
     params
+
+    # function that computes surprise
+    computeSurprise
 end
 
 
@@ -45,11 +48,20 @@ function perfect()
         return alpha
     end
 
+    # compute surprise
+    function computeSurprise(x_t, col, alpha_0)
+        alpha = params()
+        alpha_t = alpha[:,col]
+
+        return computeSBF(x_t, alpha_0, alpha_t)
+    end
+
     return UpdateRule(
         false,
         init,
         update,
-        params
+        params,
+        computeSurprise
     )
 end
 
@@ -84,11 +96,20 @@ function leaky(w, updateAll = false)
         return alpha
     end
 
+    # compute surprise
+    function computeSurprise(x_t, col, alpha_0)
+        alpha = params()
+        alpha_t = alpha[:,col]
+
+        return computeSBF(x_t, alpha_0, alpha_t)
+    end
+
     return UpdateRule(
         updateAll,
         init,
         updateAll ? updateAllCols : updateCol,
-        params
+        params,
+        computeSurprise
     )
 end
 
@@ -130,15 +151,24 @@ function varSMiLe(m, updateAll = false)
 
     # get state
     function params()
-        # return corresponding alpha
+        # convert to corresponding alpha
         return chiToAlpha(chi_t)
+    end
+
+    # compute surprise
+    function computeSurprise(x_t, col, alpha_0)
+        alpha = params()
+        alpha_t = alpha[:,col]
+
+        return computeSBF(x_t, alpha_0, alpha_t)
     end
 
     return UpdateRule(
         updateAll,
         init,
         update,
-        params
+        params,
+        computeSurprise
     )
 end
 
@@ -235,13 +265,30 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
 
     # get state
     function params()
-        return chi_t, w
+        alpha_t = zeros(size(chi_t))
+        for i in 1:N
+            alpha_t[i,:,:] = chiToAlpha(chi_t[i,:,:])
+        end
+
+        return alpha_t, w
+    end
+
+    # compute surprise
+    function computeSurprise(x_t, col, alpha_0)
+        alpha_, w_ = params()
+        alpha_t = zeros((N, 2))
+        for i in 1:N
+            alpha_t[i,:] = alpha_[i,:,col]
+        end
+
+        return computeSBF(x_t, alpha_0, alpha_t, w_)
     end
 
     return UpdateRule(
         updateAll,
         init,
         update,
-        params
+        params,
+        computeSurprise
     )
 end
