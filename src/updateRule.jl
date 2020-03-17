@@ -19,6 +19,9 @@ mutable struct UpdateRule
 
     # function that returns the current parameters
     params
+    
+    # function that computes theta
+    computeTheta
 
     # function that computes surprise
     computeSurprise
@@ -47,6 +50,12 @@ function perfect()
     function params()
         return alpha
     end
+    
+    # compute theta
+    function computeTheta(col)
+        alpha_ = params()
+        return alpha_[1,col] / sum(alpha_)
+    end
 
     # compute surprise
     function computeSurprise(x_t, col, alpha_0)
@@ -61,6 +70,7 @@ function perfect()
         init,
         update,
         params,
+        computeTheta,
         computeSurprise
     )
 end
@@ -83,17 +93,23 @@ function leaky(w, updateAll = false)
     # update state
     function updateCol(x_t, col, x_t_weight = 1)
         alpha[:,col] = decay * (alpha[:,col] .- 1) .+ 1
-        alpha[x_t+1,col] += x_t_weight
+        alpha[x_t+1,col] += decay * x_t_weight
     end
 
     function updateAllCols(x_t, col, x_t_weight = 1)
         alpha[:,:] = decay * (alpha[:,:] .- 1) .+ 1
-        alpha[x_t+1,col] += x_t_weight
+        alpha[x_t+1,col] += decay * x_t_weight
     end
 
     # get state
     function params()
         return alpha
+    end
+    
+    # compute theta
+    function computeTheta(col)
+        alpha_ = params()
+        return alpha_[1,col] / sum(alpha_)
     end
 
     # compute surprise
@@ -109,6 +125,7 @@ function leaky(w, updateAll = false)
         init,
         updateAll ? updateAllCols : updateCol,
         params,
+        computeTheta,
         computeSurprise
     )
 end
@@ -154,6 +171,12 @@ function varSMiLe(m, updateAll = false)
         # convert to corresponding alpha
         return chiToAlpha(chi_t)
     end
+    
+    # compute theta
+    function computeTheta(col)
+        alpha_ = params()
+        return alpha_[1,col] / sum(alpha_)
+    end
 
     # compute surprise
     function computeSurprise(x_t, col, alpha_0)
@@ -168,6 +191,7 @@ function varSMiLe(m, updateAll = false)
         init,
         update,
         params,
+        computeTheta,
         computeSurprise
     )
 end
@@ -272,6 +296,17 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
 
         return alpha_t, w
     end
+    
+    # compute theta
+    function computeTheta(col)
+        alpha_, w_ = params()
+        thetas = zeros(N)
+        for i in 1:N
+            thetas[i] = alpha_[i,1,col] / sum(alpha_[i,:,col])
+        end
+        
+        return sum(thetas .* w_)
+    end
 
     # compute surprise
     function computeSurprise(x_t, col, alpha_0)
@@ -289,6 +324,7 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
         init,
         update,
         params,
+        computeTheta,
         computeSurprise
     )
 end
