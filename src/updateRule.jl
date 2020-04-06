@@ -1,68 +1,74 @@
 # updateRule.jl
-using Distributions
+using Distributions, Pipe, JuliennedArrays
 
 include("utils.jl")
+
+### callback skeletion
+
+mutable struct Callback{F,R}
+    run::F
+
+    function Callback(fun::F, R) where F
+        return new{F,R}(fun)
+    end
+end
 
 
 ### update rule skeleton
 
-mutable struct UpdateRule
+mutable struct UpdateRule{I,U,P,T,S}
     # flag that indicates whether to update all parameters
     # or just the current column
     updateAll::Bool
 
     # function that initializes inital parameters
-    init
+    init::I
 
      # function that updates the current parameters
-    update
+    update::U
 
     # function that returns the current parameters
-    params
-    
-    # function that computes theta
-    computeTheta
+    params::P
 
-    # function that computes surprise
-    computeSurprise
+    # function that computes theta
+    computeTheta::T
+
+    # function that computes the Surprise Bayes Factor
+    computeSBF::S
+
+    # str
+    str
 end
 
-
 ### perfect integration
-
 function perfect()
 
     # set inital state
-    alpha = nothing
+    alpha = Array{Float64,2}(undef, 0, 0)
 
     # init state
-    function init(alpha_0)
-        alpha = deepcopy(alpha_0)
+    function init(alpha_0::Array{Float64,2})
+        alpha = copy(alpha_0)
     end
 
     # update state
-    function update(x_t, col, x_t_weight = 1)
-        # update is simply adding to the corresponding alpha
-        alpha[x_t+1, col] += x_t_weight
+    function update(x_t::Int, col::Int)
+        alpha[x_t+1, col] += 1
     end
 
     # get state
     function params()
         return alpha
     end
-    
+
     # compute theta
-    function computeTheta(col)
-        alpha_ = params()
-        return alpha_[1,col] / sum(alpha_)
+    function computeTheta(col::Int)
+        return utilsComputeTheta(alpha[:,col])
     end
 
     # compute surprise
-    function computeSurprise(x_t, col, alpha_0)
-        alpha = params()
-        alpha_t = alpha[:,col]
-
-        return computeSBF(x_t, alpha_0, alpha_t)
+    function computeSBF(x_t::Int, col::Int, alpha_0::Array{Float64,1})
+        return utilsComputeSBF(x_t, alpha_0, alpha[:,col])
     end
 
     return UpdateRule(
@@ -71,7 +77,8 @@ function perfect()
         update,
         params,
         computeTheta,
-        computeSurprise
+        computeSBF,
+        "perfect()"
     )
 end
 
@@ -82,51 +89,50 @@ end
 function leaky(w, updateAll = false)
 
     # set inital state
-    alpha = nothing
+    alpha = Array{Float64,2}(undef, 0, 0)
     decay = exp(-1.0 / w)
 
     # init state
-    function init(alpha_0)
-        alpha = deepcopy(alpha_0)
+    function init(alpha_0::Array{Float64,2})
+        alpha = copy(alpha_0)
     end
 
     # update state
-    function updateCol(x_t, col, x_t_weight = 1)
+    function updateCol(x_t::Int, col::Int)
+        alpha[x_t+1,col] += 1
         alpha[:,col] = decay * (alpha[:,col] .- 1) .+ 1
-        alpha[x_t+1,col] += decay * x_t_weight
     end
 
-    function updateAllCols(x_t, col, x_t_weight = 1)
-        alpha[:,:] = decay * (alpha[:,:] .- 1) .+ 1
-        alpha[x_t+1,col] += decay * x_t_weight
+    function updateAllCols(x_t::Int, col::Int)
+        alpha[x_t+1,col] += 1
+        alpha = decay * (alpha .- 1) .+ 1
     end
+
+    update = updateAll ? updateAllCols : updateCol;
 
     # get state
     function params()
         return alpha
     end
-    
+
     # compute theta
-    function computeTheta(col)
-        alpha_ = params()
-        return alpha_[1,col] / sum(alpha_)
+    function computeTheta(col::Int)::Float64
+        return utilsComputeTheta(alpha[:,col])
     end
 
     # compute surprise
-    function computeSurprise(x_t, col, alpha_0)
-        alpha = params()
-        alpha_t = alpha[:,col]
-
-        return computeSBF(x_t, alpha_0, alpha_t)
+    function computeSBF(x_t::Int, col::Int, alpha_0::Array{Float64,1})
+        return utilsComputeSBF(x_t, alpha_0, alpha[:,col])
     end
 
     return UpdateRule(
         updateAll,
         init,
-        updateAll ? updateAllCols : updateCol,
+        update,
         params,
         computeTheta,
-        computeSurprise
+        computeSBF,
+        "leaky($w, $updateAll)"
     )
 end
 
@@ -137,53 +143,56 @@ end
 function varSMiLe(m, updateAll = false)
 
     # set initial state
-    chi_0 = nothing
-    chi_t = nothing
+    chi_0 = Array{Float64,2}(undef, 0, 0)
+    chi_t = Array{Float64,2}(undef, 0, 0)
 
     # init state
-    function init(alpha_0)
-        # shape of chi is (2, 2^m) (m = window length)
-        # shape[1] == 2: for value of x_t (binary signal)
-        # shape[2] == 2^m: for every possible sequence of length m before x_t
-        chi_0 = alphaToChi(alpha_0)
-        chi_t = alphaToChi(alpha_0)
+    function init(alpha_0::Array{Float64,2})
+        # chi is 2 x 2^m, m = window length
+        chi_0 = alphaToChi(alpha_0) |> copy
+        chi_t = alphaToChi(alpha_0) |> copy
     end
 
+
     # update state
-    function update(x_t, col, x_t_weight = 1.0)
-        # compute surprise
+    function updateCol(gamma::Float64, col::Int)
+        chi_t[:,col] = (1.0 - gamma) .* chi_t[:,col] + gamma .* chi_0[:,col]
+    end
+
+    function updateAllCols(gamma::Float64, col::Int)
+        chi_t = (1.0 - gamma) .* chi_t + gamma .* chi_0
+    end
+
+    updateChi = updateAll ? updateAllCols : updateCol
+
+    function update(x_t::Int, col::Int)
+        # compute gamma
         sbf = computeSBFFromChi(x_t, chi_0[:,col], chi_t[:,col])
         gamma = computeGamma(sbf, m)
 
         # update chi
-        if updateAll
-            chi_t = (1.0 - gamma) .* chi_t + gamma .* chi_0
-        else
-            chi_t[:,col] = (1.0 - gamma) .* chi_t[:,col] + gamma .* chi_0[:,col]
-        end
+        updateChi(gamma, col)
 
         # add observation
-        chi_t[x_t+1,col] += x_t_weight
+        chi_t[x_t+1,col] += 1
     end
 
     # get state
     function params()
         # convert to corresponding alpha
-        return chiToAlpha(chi_t)
+        return chiToAlpha(chi_t) |> copy
     end
-    
+
     # compute theta
-    function computeTheta(col)
-        alpha_ = params()
-        return alpha_[1,col] / sum(alpha_)
+    function computeTheta(col::Int)
+        alpha = params()
+        return utilsComputeTheta(alpha[:,col])
     end
 
     # compute surprise
-    function computeSurprise(x_t, col, alpha_0)
+    function computeSBF(x_t::Int, col::Int, alpha_0::Array{Float64,1})
         alpha = params()
-        alpha_t = alpha[:,col]
-
-        return computeSBF(x_t, alpha_0, alpha_t)
+        return utilsComputeSBF(x_t, alpha_0, alpha[:,col])
     end
 
     return UpdateRule(
@@ -192,7 +201,8 @@ function varSMiLe(m, updateAll = false)
         update,
         params,
         computeTheta,
-        computeSurprise
+        computeSBF,
+        "varSMiLe($m, $updateAll)"
     )
 end
 
@@ -205,36 +215,30 @@ end
 function particleFiltering(m, N, Nthrs, updateAll = false)
 
     # init state
-    chi_0 = nothing
-    chi_t = nothing
-    w = nothing
+    chi_0 = Array{Float64,2}(undef, 0, 0)
+    chi_t = Array{Float64,3}(undef, N, 0, 0)
+    w = ones(N) ./ N
 
     # set inital state
-    function init(alpha_0)
-        # shape should be (N, 2, 2^m) (m = window length)
-        # shape[1] == N: for every particle i in 1:N
-        # shape[2] == 2: for value of x_t (binary signal)
-        # shape[3] == 2^m: for every possible sequence of length m before x_t
-        chi_0 = zeros((N, size(alpha_0)...))
-        chi_t = zeros((N, size(alpha_0)...))
-
-        for i in 1:N
-            chi_0[i,:,:] = alphaToChi(alpha_0)
-            chi_t[i,:,:] = alphaToChi(alpha_0)
-        end
-
-        # shape should be (N,)
-        # shape[1] == N: for every particle i in 1:N
-        w = ones(N) ./ N
+    function init(alpha_0::Array{Float64,2})
+        # chi_t is N x 2 x 2^m, m = window length
+        chi_0 = alphaToChi(alpha_0) |> copy
+        chi_t = @pipe alphaToChi(alpha_0) |>
+                      copy |>
+                      fill(_, N) |>
+                      twoDimArrayToMatrix
     end
 
-    # update rule
-    function update(x_t, col, x_t_weight = 1)
+    assignAllCols = (chi::Array{Float64,3}, col::Int) -> chi_t = chi
+    assignCol = (chi::Array{Float64,3}, col::Int) -> chi_t[:,:,col] = chi[:,:,col]
+    assignChi = updateAll ? assignAllCols : assignCol
+
+    function update(x_t::Int, col::Int)
         # compute surprises
-        sbfs = zeros(N)
-        for i in 1:N
-            sbfs[i] = computeSBFFromChi(x_t, chi_0[i,:,col], chi_t[i,:,col])
-        end
+        sbfs = map(
+            chi -> computeSBFFromChi(x_t, chi_0[:,col], chi[:,col]),
+            Slice(chi_t, 2, 3)
+        )
         sbf = weightedHarmonicMean(sbfs, w)
 
         # compute gammas
@@ -253,70 +257,53 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
         if Neff < Nthrs
             # resample particles based on current weights
             newParticles = rand(Multinomial(N, w))
-            chi = zeros(size(chi_t))
-            counter = 0
 
-            # copy new particles
-            for (i, nParticles) in enumerate(newParticles)
-                for j in 1:nParticles
-                    if updateAll
-                        # resample all columns
-                        chi[j+counter,:,:] = chi_t[i,:,:]
-                    else
-                        # only resample given column
-                        chi[j+counter,:,col] = chi_t[i,:,col]
-                    end
-                end
-            end
+            # transform
+            chi = @pipe mapreduce(x -> fill(x[1], x[2]), vcat, enumerate(newParticles)) |>
+                        map(p -> chi_t[p,:,:], _) |>
+                        twoDimArrayToMatrix;
+            assignChi(chi, col);
 
-            # set new particles and weights
-            chi_t = deepcopy(chi)
             w = ones(N) ./ N
         end
 
         # update chi
-        for i in 1:N
-            # if h[i] == 0, use (t), else use (0)
-            if updateAll
-                chi_t[i,:,:] = (1.0 - h[i]) .* chi_t[i,:,:] + gamma .* chi_0[i,:,:]
-            else
-                chi_t[i,:,col] = (1.0 - h[i]) .* chi_t[i,:,col] + gamma .* chi_0[i,:,col]
-            end
+        chi = map(
+            chi -> (1.0 - h[i]) .* chi + gamma .* chi_0,
+            Slices(chi_t, 2, 3)
+        ) |> twoDimArrayToMatrix;
+        assignChi(chi, col);
 
-            chi_t[i,x_t+1,col] += x_t_weight
-        end
+        # update chi
+        chi_t[:,x_t+1,col] .+= 1
     end
 
     # get state
     function params()
-        alpha_t = zeros(size(chi_t))
-        for i in 1:N
-            alpha_t[i,:,:] = chiToAlpha(chi_t[i,:,:])
-        end
+        alpha = map(
+            chiToAlpha,
+            Slices(chi_t, 2, 3)
+        ) |> twoDimArrayToMatrix;
 
-        return alpha_t, w
+        return alpha, w
     end
-    
+
     # compute theta
-    function computeTheta(col)
-        alpha_, w_ = params()
-        thetas = zeros(N)
-        for i in 1:N
-            thetas[i] = alpha_[i,1,col] / sum(alpha_[i,:,col])
-        end
-        
-        return sum(thetas .* w_)
+    function computeTheta(col::Int)
+        alpha, _ = params()
+
+        return map(
+            a -> utilsComputeTheta(a[:,col]),
+            Slices(alpha, 2, 3)
+        ) .* w |> sum
     end
 
     # compute surprise
-    function computeSurprise(x_t, col, alpha_0)
-        alpha_, w_ = params()
-        alpha_t = zeros((N, 2))
-        for i in 1:N
-            alpha_t[i,:] = alpha_[i,:,col]
-        end
+    function computeSBF(x_t::Int, col::Int, alpha_0::Array{Float64,1})
+        alpha, _ = params()
+        alpha_t = map(a -> a[:,col], Slices(alpha, 2, 3))
 
-        return computeSBF(x_t, alpha_0, alpha_t, w_)
+        return utilsComputeSBF(x_t, alpha_0, alpha_t, w)
     end
 
     return UpdateRule(
@@ -325,6 +312,7 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
         update,
         params,
         computeTheta,
-        computeSurprise
+        computeSBF,
+        "particleFiltering($m, $N, $Nthrs, $updateAll)"
     )
 end

@@ -1,62 +1,81 @@
 # utils.jl
-using SpecialFunctions
+using SpecialFunctions, Pipe, JuliennedArrays
+
+function twoDimArrayToMatrix(array::Array{Array{T,2},1}) where T <: Real
+    return @pipe cat(array..., dims=3) |> permutedims(_, (3, 1, 2))
+end
 
 
 ### compute the modulation factor gamma
 
-function computeGamma(surprise, m)
+function computeGamma(surprise::Float64, m::Float64)
     return m * surprise / (1.0 + m * surprise)
 end
 
 
+### compute theta (P(y = x_t)) from alpha
+
+function computeTheta(alpha::Array{Float64,1}, x_t = 1)
+    # might have to adapt this code for non-binary signals
+    @assert(length(alpha) == 2)
+    @assert(0 <= x_t <= 1)
+
+    return alpha[x_t + 1] / sum(alpha)
+end
+
+utilsComputeTheta = computeTheta
+
 ### compute "Base Factor surprise" for observation x_t
 
 # x_t: current observation
-# alpha_0: shape should be (2,) (binary signal)
-# alpha_t: shape should be (2,) (binary signal)
-function computeSBF(x_t, alpha_0, alpha_t)
-    # check for same size
+# alpha_0: shoule be of length 2 (binary signal)
+# alpha_t: should be of length 2 (binary signal)
+
+function computeSBF(x_t::Int, alpha_0::Array{Float64,1}, alpha_t::Array{Float64,1})
     @assert(size(alpha_0) == size(alpha_t))
 
-    # probability under given state
-    # add 1 to x_t to go from value (0, 1) to index (1, 2)
-    p = (alpha) -> alpha[x_t + 1] / sum(alpha)
+    # surprise is ratio of probabilities
+    return computeTheta(alpha_0, x_t) / computeTheta(alpha_t, x_t)
+end
+
+utilsComputeSBF = computeSBF
+
+function computeSBFFromChi(x_t::Int, chi_0::Array{Float64,1}, chi_t::Array{Float64,1})
+    return computeSBF(x_t, chi_0 .+ 1, chi_t .+ 1)
+end
+
+utilsComputeSBFFromChi = computeSBFFromChi
+
+
+# alpha_0: should be of length 2 (binary signal)
+# alpha_t: should be N x 2 (binary signal)
+# w_t: should be of length N
+
+function computeSBF(x_t::Int,
+                    alpha_0::Array{Float64,1},
+                    alpha_t::Array{Array{Float64,1},1},
+                    w_t::Array{Float64,1})
+
+    # check for same number of particles
+    @assert(length(w_t) == size(alpha_t, 1))
+
+    # compute theta under alpha_t
+    p_t = sum(computeTheta.(alpha_t, x_t) .* w_t)
 
     # surprise is ratio of probabilities
-    return p(alpha_0) / p(alpha_t)
+    return computeTheta(alpha_0, x_t) / p_t
 end
 
-function computeSBFFromChi(x_t, chi_0, chi_t)
-    return computeSBF(x_t, chi_0 .+ 1.0, chi_t .+ 1.0)
-end
-
-# x_t: current observation
-# alpha_0: shape should be (2,) (binary signal)
-# alpha_t: shape should be (N, 2,) (binary signal)
-# w_t: shape should be (N,) (binary signal)
-function computeSBF(x_t, alpha_0, alpha_t, w_t)
-    # probability under given state
-    # add 1 to x_t to go from value (0, 1) to index (1, 2)
-    p = (alpha) -> alpha[x_t + 1] / sum(alpha)
-    
-    p_t = 0
-    for i in 1:length(w_t)
-       p_t += w_t[i] * p(alpha_t[i,:]) 
-    end
-
-    # surprise is ratio of probabilities
-    return p(alpha_0) / p_t
-end
-
+utilsComputeSBF = computeSBF
 
 ### utility functions to switch between alpha and chi
 
 function chiToAlpha(chi)
-    return deepcopy(chi) .+ 1.0
+    return chi .+ 1.0
 end
 
 function alphaToChi(alpha)
-    return deepcopy(alpha) .- 1.0
+    return alpha .- 1.0
 end
 
 
@@ -70,7 +89,31 @@ function weightedHarmonicMean(arr, w)
     for i in 1:n
         @inbounds s += w[i] * inv(arr[i])
     end
+
     return sum(w) / s
+end
+
+
+### find nonzero elements in array
+
+function findnz(c)
+    a = similar(c, Int)
+    count = 1
+    @inbounds for i in eachindex(c)
+        a[count] = i
+        count += (c[i] != zero(eltype(c)))
+    end
+    return resize!(a, count-1)
+end
+
+function findnonnan(c)
+    a = similar(c, Int)
+    count = 1
+    @inbounds for i in eachindex(c)
+        a[count] = i
+        count += !isnan(c[i])
+    end
+    return resize!(a, count-1)
 end
 
 

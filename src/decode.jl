@@ -3,7 +3,6 @@ using Random
 
 include("updateRule.jl")
 
-
 ### Generate a sequence of length len containing elements 0 and 1
 
 function generateSeq(len, seed = 1234)
@@ -14,7 +13,13 @@ end
 
 ### Decode a sequence to compute transition probabilites
 
-function decode(seq, m, alpha_0, rule::UpdateRule, callback = () -> nothing)
+# flag that indicates the action to take when the previous
+# sequence is not yet m elements long
+# ignore or average over possible previous sequences
+function decode(seq, m, alpha_0, rule::UpdateRule;
+    callback::Callback{F,R} = Callback((_...) -> nothing, Nothing),
+    ignoreFirstM = true) where {F,R}
+
     len = length(seq)
     d = 2^m
 
@@ -24,28 +29,46 @@ function decode(seq, m, alpha_0, rule::UpdateRule, callback = () -> nothing)
     # init update rule
     rule.init(alpha_0)
 
-    # decode sequence
-    for t in 1:len
-        x_t = seq[t]
+    # callback result
+    callbackResult = Array{R,1}(undef, len+1)
 
-        if t < m + 1
+    # partial window
+    if !ignoreFirstM
+        for t in 1:m
+            x_t = seq[t]
+
             # we have some missing elements at the beginning of the window
             # we solve this by averaging over possible value
             minIdx = t > 1 ? seqToIdx(seq[1:t-1]) : 1
             step = 2^(t-1)
             maxIdx = d
 
+            # perform callback
+            callbackResult[t] = callback.run(rule, x_t, minIdx)
+
+            # add pseudocount of 1 to every possible value
             cols = minIdx:step:maxIdx
             for col in cols
-                rule.update(x_t, col, 1.0 / length(cols))
+                rule.update(x_t, col)
             end
-            callback(x_t, minIdx)
-        else
-            col = seqToIdx(seq[t-m:t-1])
-            rule.update(x_t, col)
-            callback(x_t, col)
         end
     end
+
+    # full window
+    for t in m+1:len
+        x_t = seq[t]
+        col = seqToIdx(seq[t-m:t-1])
+
+        callbackResult[t] = callback.run(rule, x_t, col)
+        rule.update(x_t, col)
+    end
+
+    # add final callback result
+    x_t = seq[end]
+    col = seqToIdx(seq[end-m:end-1])
+    callbackResult[end] = callback.run(rule, x_t, col)
+
+    return callbackResult
 end
 
 function seqToIdx(seq)
