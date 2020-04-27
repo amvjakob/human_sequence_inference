@@ -1,4 +1,4 @@
-using MAT, Printf
+using MAT, Printf, FileIO, JLD2
 
 include("utils.jl")
 
@@ -60,6 +60,16 @@ getFilename(subjectNumber) = @sprintf(
     lpad(subjectNumber, 2, "0")
 )
 
+getJLD2Filename(subjectNumber) = @sprintf(
+    "../../../../../../Documents/human_sequence_inference_data/jld2/subject%s.jld2",
+    lpad(subjectNumber, 2, "0")
+)
+
+function loadJLD2(filename)
+    @load filename subject
+    return subject;
+end
+
 function loadSubjectData(filename)
     file = matopen(filename)
 
@@ -87,8 +97,8 @@ function loadSubjectData(filename)
     seqCleanedIdx = map((seqIdx, megIdx) -> findall(in(megIdx), seqIdx), seqCleanedGlobalIdx, megGlobalIdx)
     megCleanedIdx = map((seqIdx, megIdx) -> findall(in(seqIdx), megIdx), seqCleanedGlobalIdx, megGlobalIdx)
 
-    # apply overlap index to MEG and make units pT
-    megCleaned = map((m,i) -> 1e12 * m[i,:,:], megCleaned, megCleanedIdx)
+    # apply overlap index to MEG
+    megCleaned = map((m,i) -> m[i,:,:], megCleaned, megCleanedIdx)
 
     return SubjectData(
         seqCleaned,

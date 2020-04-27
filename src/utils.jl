@@ -1,8 +1,46 @@
 # utils.jl
 using SpecialFunctions, Pipe, JuliennedArrays
 
-function twoDimArrayToMatrix(array::Array{Array{T,2},1}) where T <: Real
+function lg(x...)
+    println("[", now(), "] ", join(x, " ")...)
+    flush(stdout)
+end
+
+function lnrange(x1::Int, x2::Int, n::Int)
+    return unique(round(Int, Base.MathConstants.e^y) for y in range(x1, x2, length=n))
+end
+
+function log2range(x1::Int, x2::Int, n::Int)
+    N = n
+    rng(s,e,l) = unique(round(Int, 2^y) for y in range(x1, x2, length=n))
+    while length(rng(x1,x2,n)) < N
+        n += 1
+    end
+    return rng(x1,x2,n)
+end
+
+function logrange(x1::Int, x2::Int, n::Int)
+    return unique(round(Int, 10^y) for y in range(x1, x2, length=n))
+end
+
+function arrayOfArrayToMatrix(array::Array{T,N}) where {T <: Real,N}
+    return array
+end
+
+function arrayOfArrayToMatrix(array::Array{Array{T,1},1}) where T <: Real
+    return @pipe cat(array..., dims=2) |> permutedims(_, (2, 1))
+end
+
+function arrayOfArrayToMatrix(array::Array{Array{T,1},2}) where T <: Real
+    return @pipe cat(array..., dims=2) |> reshape(_, size(array[1])..., size(array)...)
+end
+
+function arrayOfArrayToMatrix(array::Array{Array{T,2},1}) where T <: Real
     return @pipe cat(array..., dims=3) |> permutedims(_, (3, 1, 2))
+end
+
+function arrayOfArrayToMatrix(array::Array{Array{T,3},1}) where T <: Real
+    return @pipe cat(array..., dims=4) |> permutedims(_, (4, 1, 2, 3))
 end
 
 

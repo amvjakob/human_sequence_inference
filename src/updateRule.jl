@@ -3,7 +3,8 @@ using Distributions, Pipe, JuliennedArrays
 
 include("utils.jl")
 
-### callback skeletion
+
+### callback skeleton
 
 mutable struct Callback{F,R}
     run::F
@@ -39,6 +40,52 @@ mutable struct UpdateRule{I,U,P,T,S}
     # str
     str
 end
+
+
+### utility functions
+
+function build_rules_leaky(ws)
+    return map(w -> leaky(w, true), ws)
+end
+
+function build_rules_varsmile(ms)
+    return map(m -> varSMiLe(m, true), ms)
+end
+
+function build_models(rules::Array{UpdateRule{I,U,P,T,S},1},
+        ms::Array{Int,1},
+        names::Array{Str,1}) where {I,U,P,T,S,Str <: AbstractString}
+    
+    return map(m -> map(r -> Dict(
+                "m" => m[1],
+                "alpha_0" => ones(2,2^m[1]),
+                "rule" => r,
+                "name" => m[2]), rules), zip(ms, names))
+end
+
+function build_models(rules::Array{UpdateRule,1},
+        ms::Array{Int,1},
+        names::Array{Str,1}) where {Str <: AbstractString}
+    
+    return map(m -> map(r -> Dict(
+                "m" => m[1],
+                "alpha_0" => ones(2,2^m[1]),
+                "rule" => r,
+                "name" => m[2]), rules), zip(ms, names))
+end
+
+function build_models(rules::Array{UpdateRule,1}, ms::Array{Int,1})
+    
+    return build_models(rules, ms, map(m -> latexstring("m = $m"), ms))
+end
+
+function build_models(rules::Array{UpdateRule{I,U,P,T,S},1},
+        ms::Array{Int,1}) where {I,U,P,T,S}
+    
+    return build_models(rules, ms, map(m -> latexstring("m = $m"), ms))
+end
+
+
 
 ### perfect integration
 function perfect()
@@ -88,24 +135,30 @@ end
 # w: leak factor
 function leaky(w, updateAll = false)
 
+    if w == Inf
+        return perfect()
+    end
+
     # set inital state
-    alpha = Array{Float64,2}(undef, 0, 0)
+    alpha  = Array{Float64,2}(undef, 0, 0)
+    alpha0 = Array{Float64,2}(undef, 0, 0)
     decay = exp(-1.0 / w)
 
     # init state
     function init(alpha_0::Array{Float64,2})
-        alpha = copy(alpha_0)
+        alpha  = copy(alpha_0)
+        alpha0 = copy(alpha_0)
     end
 
     # update state
     function updateCol(x_t::Int, col::Int)
         alpha[x_t+1,col] += 1
-        alpha[:,col] = decay * (alpha[:,col] .- 1) .+ 1
+        alpha[:,col] = decay * (alpha[:,col] - alpha0[:,col]) + alpha0[:,col]
     end
 
     function updateAllCols(x_t::Int, col::Int)
         alpha[x_t+1,col] += 1
-        alpha = decay * (alpha .- 1) .+ 1
+        alpha = decay * (alpha - alpha0) + alpha0
     end
 
     update = updateAll ? updateAllCols : updateCol;
@@ -226,7 +279,7 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
         chi_t = @pipe alphaToChi(alpha_0) |>
                       copy |>
                       fill(_, N) |>
-                      twoDimArrayToMatrix
+                      arrayOfArrayToMatrix
     end
 
     assignAllCols = (chi::Array{Float64,3}, col::Int) -> chi_t = chi
@@ -261,7 +314,7 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
             # transform
             chi = @pipe mapreduce(x -> fill(x[1], x[2]), vcat, enumerate(newParticles)) |>
                         map(p -> chi_t[p,:,:], _) |>
-                        twoDimArrayToMatrix;
+                        arrayOfArrayToMatrix;
             assignChi(chi, col);
 
             w = ones(N) ./ N
@@ -271,7 +324,7 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
         chi = map(
             chi -> (1.0 - h[i]) .* chi + gamma .* chi_0,
             Slices(chi_t, 2, 3)
-        ) |> twoDimArrayToMatrix;
+        ) |> arrayOfArrayToMatrix;
         assignChi(chi, col);
 
         # update chi
@@ -283,7 +336,7 @@ function particleFiltering(m, N, Nthrs, updateAll = false)
         alpha = map(
             chiToAlpha,
             Slices(chi_t, 2, 3)
-        ) |> twoDimArrayToMatrix;
+        ) |> arrayOfArrayToMatrix;
 
         return alpha, w
     end
