@@ -29,83 +29,85 @@ include("utils.jl")
 
 
 mutable struct SubjectData{S,SeqIdx,M,MegIdx,T,MegData}
-    # data
-    seq::S
-    seqIdx::SeqIdx
-    meg::M
-    megIdx::MegIdx
-    time::T
-    megData::MegData
+  # data
+  seq::S
+  seqIdx::SeqIdx
+
+  meg::M
+  megIdx::MegIdx
+  
+  time::T
+  megData::MegData
 end
 
 
 function getNValidTrials(s::SubjectData)
-    return reduce(+, map(m -> size(m, 1), s.meg))
+  return reduce(+, map(m -> size(m, 1), s.meg))
 end
 
 function getTimestamps(s::SubjectData)
-    return s.time
+  return s.time
 end
 
 function getSeqForBlock(s::SubjectData, block)
-    return s.seq[block]
+  return s.seq[block]
 end
 
 function getMEGForBlock(s::SubjectData, block)
-    return s.meg[block]
+  return s.meg[block]
 end
 
 getFilename(subjectNumber) = @sprintf(
-    "../../../../../../Documents/human_sequence_inference_data/subject%s.mat",
-    lpad(subjectNumber, 2, "0")
+  "../../../../../../Documents/human_sequence_inference_data/subject%s.mat",
+  lpad(subjectNumber, 2, "0")
 )
 
 getJLD2Filename(subjectNumber) = @sprintf(
-    "../../../../../../Documents/human_sequence_inference_data/jld2/subject%s.jld2",
-    lpad(subjectNumber, 2, "0")
+  "../../../../../../Documents/human_sequence_inference_data/jld2/subject%s.jld2",
+  lpad(subjectNumber, 2, "0")
 )
 
 function loadJLD2(filename)
-    @load filename subject
-    return subject;
+  @load filename subject
+  return subject;
 end
 
 function loadSubjectData(filename)
-    file = matopen(filename)
+  file = matopen(filename)
 
-    # read file
-    seq = read(file, "seq")
-    seqIdx = read(file, "seqidx")
-    megData = read(file, "meg")
+  # read file
+  seq = read(file, "seq")
+  seqIdx = read(file, "seqidx")
+  megData = read(file, "meg")
 
-    close(file)
+  close(file)
 
-    # transform sequence
-    seqRaw = dropdims(map(s -> s[1,:], seq), dims=1);
-    seqCleanedGlobalIdx = findnonnan.(seqRaw);
-    seqCleaned = map((s,i) -> Int.(s[i] .- 1), seqRaw, seqCleanedGlobalIdx);
+  # transform sequence
+  seqRaw = dropdims(map(s -> s[1,:], seq), dims=1);
+  seqCleanedGlobalIdx = findnonnan.(seqRaw);
+  seqCleaned = map((s,i) -> Int.(s[i] .- 1), seqRaw, seqCleanedGlobalIdx);
 
-    # transform meg data
-    megTrialInfo = Int.(megData["trialinfo"])
-    megCleaned = Array{Array{Float64,3},1}(undef, length(seqRaw))
-    @inbounds for i in eachindex(seqRaw)
-        megCleaned[i] = megData["trial"][megTrialInfo[:,3] .=== i,:,:]
-    end
-    megGlobalIdx = map(s -> Int.(s[1,:]), seqIdx)
+  # transform meg data
+  megTrialInfo = Int.(megData["trialinfo"])
+  megCleaned = Array{Array{Float64,3},1}(undef, length(seqRaw))
+  @inbounds for i in eachindex(seqRaw)
+      megCleaned[i] = megData["trial"][megTrialInfo[:,3] .=== i,:,:]
+  end
+  megGlobalIdx = map(s -> Int.(s[1,:]), seqIdx)
 
-    # compute overlapping indices
-    seqCleanedIdx = map((seqIdx, megIdx) -> findall(in(megIdx), seqIdx), seqCleanedGlobalIdx, megGlobalIdx)
-    megCleanedIdx = map((seqIdx, megIdx) -> findall(in(seqIdx), megIdx), seqCleanedGlobalIdx, megGlobalIdx)
+  # compute overlapping indices
+  seqCleanedIdx = map((seqIdx, megIdx) -> findall(in(megIdx), seqIdx), seqCleanedGlobalIdx, megGlobalIdx)
+  megCleanedIdx = map((seqIdx, megIdx) -> findall(in(seqIdx), megIdx), seqCleanedGlobalIdx, megGlobalIdx)
 
-    # apply overlap index to MEG
-    megCleaned = map((m,i) -> m[i,:,:], megCleaned, megCleanedIdx)
+  # apply overlap index to MEG
+  megCleaned = map((m,i) -> m[i,:,:], megCleaned, megCleanedIdx)
 
-    return SubjectData(
-        seqCleaned,
-        seqCleanedIdx,
-        megCleaned,
-        megCleanedIdx,
-        megData["time"][1,:],
-        megData
-    )
+  return SubjectData(
+    seqCleaned,
+    seqCleanedIdx,
+    megCleaned,
+    megCleanedIdx,
+    megData["time"][1,:],
+    megData
+  )
 end

@@ -2,111 +2,114 @@ using GLM, Printf, Dates, JuliennedArrays
 
 include("decode.jl")
 include("utils.jl")
-include("updateRule.jl")
+include("UpdateRule.jl")
 
-function computeShannonSurprise(rule, x_t, col)
-    theta = rule.computeTheta(col)
-    theta = x_t == 1 ? theta : 1 - theta
-    return -log(theta) / log(2.0)
+function compute_shannon_surprise(rule, x, col)
+  theta = rule.gettheta(col, x)
+  return -log(theta) / log(2.0)
 end
 
-function decodeShannonSurprise(seq, m, alpha_0, rule, ignoreFirstM = true)
-    # define callback to compute Shannon surprises
-    callback = Callback(computeShannonSurprise, Float64)
+function decode_shannon_surprise(seq::Array{Integer,1},
+                                 m::Integer,
+                                 alpha_0::Array{Float64,2}, 
+                                 rule::UpdateRule,
+                                 ignore_partial_window = true,
+                                 N = 2)
 
-    # decode sequence
-    surprises = decode(seq, m, alpha_0, rule;
-                       callback = callback, ignoreFirstM = ignoreFirstM)
+  # define callback to compute Shannon surprises
+  callback = Callback(compute_shannon_surprise, Float64)
 
-    if ignoreFirstM && m > 0
-        surprises[1:m] .= -log(0.5) / log(2.0)
-    end
+  # decode sequence
+  surprises = decode(seq, m, alpha_0, rule,
+                     callback = callback,
+                     ignore_partial_window = ignore_partial_window,
+                     N = N)
 
-    return surprises # [2:end]
+  if ignore_partial_window && m > 0
+    surprises[1:m] .= -log(1.0 / N) / log(2.0)
+  end
+
+  return surprises # [2:end]
 end
 
 
-function onehotencode(shape, idx)
-    onehot = zeros(shape...)
-    onehot[:,idx] .= 1
-    return onehot
+function onehotencode(shape, index)
+  onehot = zeros(shape...)
+  onehot[:,index] .= 1
+  return onehot
 end
 
-function onehotencodeSurprises(s::Tuple{Int,Array{Float64,1}})
-    block, surprise = s
+function onehotencode_surprise(s::Tuple{Int,Array{Float64,1}})
+  block, surprise = s
 
-    onehotShape = (length(surprise), 4)
-    onehot = onehotencode(onehotShape, block)
+  onehot_shape = (length(surprise), 4)
+  onehot = onehotencode(onehot_shape, block)
 
-    return hcat(onehot, surprise)
+  return hcat(onehot, surprise)
 end
 
 function regression(subject, sensor, time, rule, m, alpha_0)
-    # get suprises per block
-    surprises = decodeShannonSurprise.(subject.seq, m, Ref(alpha_0), Ref(rule))
-    surprises = map((s,i) -> s[i], surprises, subject.seqIdx)
+  # get suprises per block
+  surprises = decode_shannon_surprise.(subject.seq, m, Ref(alpha_0), Ref(rule))
+  surprises = map((s,i) -> s[i], surprises, subject.seqIdx)
 
-    # one-hot encode surprises
-    surprisesOneHot = map(onehotencodeSurprises, enumerate(surprises))
-    #surprisesOneHot = map(v -> hcat(ones(size(v)...), v), surprises)
+  # one-hot encode surprises
+  surprises_onehot = map(onehotencode_surprise, enumerate(surprises))
+  #surprises_onehot = map(v -> hcat(ones(size(v)...), v), surprises)
 
-    # get megs per block
-    megs = map(m -> m[:,sensor,time], subject.meg)
+  # get megs per block
+  megs = map(m -> m[:,sensor,time], subject.meg)
 
-    # calc regression
-    X = reduce(vcat, surprisesOneHot)
-    y = reduce(vcat, megs)
+  # calc regression
+  X = reduce(vcat, surprises_onehot)
+  y = reduce(vcat, megs)
 
-    # normalize y
-    my = mean(y)
-    sy = std(y)
-    y = (y .- my) ./ sy
+  # normalize y
+  #my = mean(y)
+  #sy = std(y)
+  #y = (y .- my) ./ sy
 
-    ols = fit(LinearModel, X, y);
+  ols = fit(LinearModel, X, y);
 
-    megs = map(m -> (m .- my) ./ sy, megs)
-    return surprises, megs, ols, y
+  #megs = map(m -> (m .- my) ./ sy, megs)
+  return surprises, megs, ols, y
 end
 
-function mapSubject(subject, models, keepBlockLevel = false, verbose = 2)
-    # init rule decode results
-    surprises = Array{Array{Array{Float64,2},1},1}(undef, length(models))
+function mapSubject(subject, models,
+                    onehotencode_blocks = false, verbose = 2)
+  # init rule decode results
+  surprises = Array{Array{Array{Float64,2},1},1}(undef, length(models))
 
-    # decode sequence for every rule
-    if verbose > 1
-        lg("mapSubject: decoding sequence for all rules")
+  # decode sequence for every rule
+  verbose > 1 && lg("mapSubject: decoding sequence for all rules")
+
+  for (m, model) in enumerate(models)
+    model_surprises = Array{Array{Float64,2},1}(undef, length(model))
+    
+    for (r, rule) in enumerate(model)
+      # decode sequence            
+      values = decode_shannon_surprise.(subject.seq, rule["m"], Ref(rule["alpha_0"]), Ref(rule["rule"]))
+      # map decoded values to overlapping index
+      values = map((s, idx) -> s[idx], values, subject.seqIdx)
+
+      if onehotencode_blocks
+        values = map(onehotencode_surprise, enumerate(values))
+      else
+        # hcat to make 2-dimensional
+        values = map(v -> hcat(ones(size(v)...), v), values)
+      end
+
+      # remove block-level array structure
+      @inbounds model_surprises[r] = reduce(vcat, values)
     end
+    
+    surprises[m] = model_surprises
+  end
 
-    for (m, model) in enumerate(models)
-        modelSurprises = Array{Array{Float64,2},1}(undef, length(model))
-        
-        for (r, rule) in enumerate(model)
-            # decode sequence            
-            values = decodeShannonSurprise.(subject.seq, rule["m"], Ref(rule["alpha_0"]), Ref(rule["rule"]))
-            # map decoded values to overlapping index
-            values = map((s, idx) -> s[idx], values, subject.seqIdx)
+  # get MEG values
+  verbose > 1 && lg("mapSubject: decoding MEG")
+  megs = reduce(vcat, subject.meg)
 
-            if keepBlockLevel
-                # one-hot encode values by block
-                values = map(onehotencodeSurprises, enumerate(values))
-            else
-                # hcat to make 2-dimensional
-                values = map(v -> hcat(ones(size(v)...), v), values)
-            end
-
-            # remove block-level structure
-            @inbounds modelSurprises[r] = reduce(vcat, values)
-        end
-        
-        surprises[m] = modelSurprises
-    end
-
-    # get MEG values
-    if verbose > 1
-        lg("mapSubject: decoding MEG")
-    end
-    megs = reduce(vcat, subject.meg)
-
-    return surprises, megs
+  return surprises, megs
 end
 ;
