@@ -69,7 +69,7 @@ getJLD2Filename(subjectNumber) = @sprintf(
 
 function loadJLD2(filename)
   @load filename subject
-  return subject;
+  return subject
 end
 
 function loadSubjectData(filename)
@@ -83,9 +83,9 @@ function loadSubjectData(filename)
   close(file)
 
   # transform sequence
-  seqRaw = dropdims(map(s -> s[1,:], seq), dims=1);
-  seqCleanedGlobalIdx = findnonnan.(seqRaw);
-  seqCleaned = map((s,i) -> Int.(s[i] .- 1), seqRaw, seqCleanedGlobalIdx);
+  seqRaw = dropdims(map(s -> s[1,:], seq), dims=1)
+  seqCleanedGlobalIdx = findnonnan.(seqRaw)
+  seqCleaned = map((s,i) -> Int.(s[i] .- 1), seqRaw, seqCleanedGlobalIdx)
 
   # transform meg data
   megTrialInfo = Int.(megData["trialinfo"])

@@ -3,181 +3,131 @@
 include("utils.jl")
 include("UpdateRule.jl")
 
-### variational SMiLe
-
-# utility functions
-function build_rules_varsmile(ms)
-  return map(m -> VarSMiLe(m, true), ms)
-end
-
+### variational SMiLe update rule
 
 # m: p_c / (1 - p_c), where p_c = probability of change
-# updateall: whether to leak all cols or just the current one
-function VarSMiLe(m, updateall = false)
+# prior: prior over window length
+# N: number of different elements in signal (binary = 2)
+# updateallcols: whether to update all cols or just the current one
 
-  # set initial state
+function VarSMiLe(m::Float64, prior::Array{Float64,1}; 
+  N = 2, updateallcols = false)
+
+  # check argument validity
+  @assert(m >= 0)
+  @assert(sum(prior) === 1.0)
+  @assert(N >= 2)
+
+  # inital state of prior is simply copy
+  prior_0::Array{Float64,1} = copy(prior)
+  prior_t::Array{Float64,1} = copy(prior)
+  
   # chi is alpha - 1
-  chi_0 = Array{Float64,2}(undef, 0, 0)
-  chi_t = Array{Float64,2}(undef, 0, 0)
+  chi_0::Array{Array{Float64,2},1} = map(i -> zeros(N, N^(i-1)), eachindex(prior))
+  chi_t::Array{Array{Float64,2},1} = deepcopy(chi_0)
 
-  # init state
-  function init(alpha_0::Array{Float64,2})
-    chi_0 = copy(alpha_0 .- 1)
-    chi_t = copy(alpha_0 .- 1)
+  # whether the prior is fixed (1 for one model and 0 for the rest)
+  isfixed::Bool = findmax(prior)[1] === 1.0
+
+
+  # reset state
+  function reset()
+    # reset prior
+    prior_t = copy(prior_0)
+
+    # reset chi
+    chi_t = deepcopy(chi_0)
   end
 
-  # update state
-  function update(x_t::Integer, col::Integer)
-    # compute gamma
-    sbf = compute_sbf(x_t, chi_0[:,col] .+ 1, chi_t[:,col] .+ 1)
-    gamma = compute_gamma(sbf, m)
+  
+  # compute thetas
+  function getthetas(x::Integer, cols::Array{<:Integer,1})::Array{Float64,1}
 
-    # surprise modulation
-    if updateall
-      chi_t        = (1.0 - gamma) .* chi_t        + gamma .* chi_0
-    else
-      chi_t[:,col] = (1.0 - gamma) .* chi_t[:,col] + gamma .* chi_0[:,col]
+    return map(chi_t, cols) do chi, col
+      # if col is 0 (partial window), we set it to 1,
+      # since this col will still be unmodified
+      c = max(col, 1)
+      # compute theta from chi
+      return compute_theta(x, chi[:,c] .+ 1)
     end
 
-    # update chi_t
-    chi_t[x_t + 1, col] += 1
-
-    # return surprise-modulated learning rate
-    return gamma
   end
 
-  # get state
-  function params()
-    return chi_t .+ 1
-  end
 
   # compute theta
-  function gettheta(col::Integer, x = 1)::Float64
-    return compute_theta(chi_t[:,col] .+ 1, x)
+  function gettheta(x::Integer, cols::Array{<:Integer,1})::Float64
+    return sum(prior_t .* getthetas(x, cols))
   end
+
 
   # compute surprise
-  function getsbf(x_t::Integer, col::Integer)
-    return compute_sbf(x_t, chi_0[:,col] .+ 1, chi_t[:,col] .+ 1)
+  function getsbf(x::Integer, cols::Array{<:Integer,1})::Float64
+    return 1.0 / N / gettheta(x, cols)
   end
 
-  return UpdateRule(
-    updateall,
-    init,
-    update,
-    params,
-    gettheta,
-    getsbf,
-    "VarSMiLe($m, $updateall)"
-  )
-end
 
-
-### variational SMiLe update rule with inference over m
-
-# m: p_c / (1 - p_c), where p_c = probability of change
-# updateall: whether to leak all cols or just the current one
-function VarSMiLeInference(m, updateall = false)
-  # set initial state
-  models   = Array{UpdateRule,1}(undef, 0)
-  priors_0 = Array{Float64,1}(undef, 0)
-  priors_t = Array{Float64,1}(undef, 0)
-
-  # init state
-  function init(prior::Array{Float64,1}, N = 2)
-    models = Array{UpdateRule,1}(undef, length(prior))
-    priors_0 = copy(prior)
-    priors_t = copy(prior)
-
-    for i in 1:length(prior)
-      len = i - 1
-
-      # use uniform Dirichlet prior for each submodel
-      model = VarSMiLe(m, updateall)
-      model.init(ones(N, N^len))
-
-      models[i] = model
-    end
+  # get params
+  function getposterior()::Array{Float64,1}
+    return prior_t
   end
 
-  # get thetas
-  function getthetas(cols::Array{<:Integer,1}, x = 1)::Array{Float64,1}
-    thetas = zeros(length(cols))
-    for i in eachindex(thetas)
-      # if col is 0 (partial window), we set it to 1 (since this col will still be unîform)
-      thetas[i] = models[i].gettheta(max(cols[i], 1), x)
-    end
-
-    return thetas
-  end
 
   # update state
   function update(x_t::Integer, cols::Array{<:Integer,1})
+
     # get params before update
-    params_before = map(m -> m.params(), models)
+    chi_t_before = deepcopy(chi_t)
     
     # update models
-    # gamma = 1 is equivalent to "forgetting" everything
-    gammas = ones(length(models))
-    for i in eachindex(models)
-      # update model if col > 0 (ignore partial window)
-      if cols[i] > 0
-        gammas[i] = models[i].update(x_t, cols[i])
+    gammas = ones(length(chi_t))
+    for i in eachindex(chi_t)
+      col = cols[i]
+      if (col > 0)
+        # compute gamma
+        sbf = compute_sbf(x_t, chi_0[i][:,col] .+ 1, chi_t[i][:,col] .+ 1)
+        gamma = compute_gamma(sbf, m)
+        gammas[i] = gamma
+
+        # surprise modulation
+        if updateallcols
+          chi_t[i]        = (1.0 - gamma) .* chi_t[i]        + gamma .* chi_0[i]
+        else
+          chi_t[i][:,col] = (1.0 - gamma) .* chi_t[i][:,col] + gamma .* chi_0[i][:,col]
+        end
+
+        # update chi_t
+        chi_t[i][x_t + 1, col] += 1
+      else
+        gamma = compute_gamma(1.0, m)
+        gammas[i] = gamma
       end
     end
 
-    # get params after update
-    params_after = map(m -> m.params(), models)
-
-    # update prior
-    N = size(params_before[1], 1)
-    for i in eachindex(priors_t)
-      len = i - 1
-
-      # compute factor
-      lnprob = 0.0
-      for col in 1:N^len
-        lnprob += ln_beta_fn(params_after[i][:,col]) - ((1 - gammas[i]) * ln_beta_fn(params_before[i][:,col]) + gammas[i] * beta_fn(ones(N)))
+    # update posterior
+    if !isfixed
+      for i in eachindex(chi_t)
+        # compute factor
+        lnprob = 0.0
+        for col in 1:size(chi_t[i], 2)
+          lnprob += ln_beta_fn(chi_t[i][:,col] .+ 1) - ((1 - gammas[i]) * ln_beta_fn(chi_t_before[i][:,col] .+ 1) + gammas[i] * ln_beta_fn(ones(N)))
+        end
+        
+        prior_t[i] = exp(lnprob) * prior_t[i] ^ (1 - gammas[i]) * prior_0[i] ^ gammas[i]
       end
-      
-      if priors_t[i] > 0 && priors_0[i] > 0
-        priors_t[i] = exp(lnprob + (1 - gammas[i]) * log(priors_t[i]) + gammas[i] * log(priors_0[i]))
-      end
+
+      # normalize prior
+      prior_t ./= sum(prior_t)
     end
-
-    # normalize prior
-    priors_t = priors_t / sum(priors_t)
   end
 
-  # get params
-  function params()
-    return map(m -> m.params(), models), priors_t
-  end
-
-  # compute theta
-  function gettheta(cols::Array{<:Integer,1}, x = 1)::Float64
-    return sum(priors_t .* getthetas(cols, x))
-  end
-
-  # compute surprise
-  function getsbfs(x_t::Integer, cols::Array{<:Integer,1})::Array{Float64,1}
-    return map(
-      i -> models[i].getsbf(x_t, max(cols[i],1)),
-      eachindex(models)
-    )
-  end
-
-  function getsbf(x_t::Integer, cols::Array{<:Integer,1})::Float64
-    return sum(priors_t .* getsbfs(x_t, cols))
-  end
 
   return UpdateRule(
-    updateall,
-    init,
-    update,
-    params,
+    reset,
     gettheta,
     getsbf,
-    "VarSMiLeInference($m, $updateall)"
+    getposterior,
+    update,
+    updateallcols,
+    "VarSMiLe($m, $prior, $updateallcols)"
   )
 end

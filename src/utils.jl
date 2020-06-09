@@ -47,6 +47,10 @@ function unwrap(a::Array{Array{T,1},2}) where T <: Real
   return result
 end
 
+function unwrap_outer(a::Array{Array{T,N},1}) where {T <: AbstractArray, N}
+  shape = pushfirst!(collect(1:N), N+1) 
+  return permutedims(cat(a..., dims=N+1), shape)
+end
 
 ### compute the surprise modulation factor gamma
 function compute_gamma(surprise::Float64, m::Real)
@@ -57,7 +61,7 @@ end
 ### compute the probability of x for a Dirichlet distribution
 # alpha: Dirichlet distribution parameters, array of length N
 # x: observation for which to compute E[theta]
-function compute_theta(alpha::Array{Float64,1}, x = 1)
+function compute_theta(x::Integer, alpha::Array{Float64,1})
   # validity checks
   @assert(length(alpha) > 1)
   @assert(0 <= x < length(alpha))
@@ -78,7 +82,7 @@ function compute_sbf(x::Integer,
   @assert(0 <= x < length(alpha_t))
 
   # Bayes Factor is ratio of probabilities
-  return compute_theta(alpha_0, x) / compute_theta(alpha_t, x)
+  return compute_theta(x, alpha_0) / compute_theta(x, alpha_t)
 end
 
 # alpha_t: current belief, array of length P, each containing an array of length N
@@ -93,10 +97,10 @@ function compute_sbf(x::Integer,
   @assert(0 <= x < length(alpha_t))
 
   # compute theta under alpha_t
-  p_t = sum(compute_theta.(alpha_t, x) .* w_t)
+  p_t = sum(compute_theta.(x, alpha_t) .* w_t)
 
   # surprise is ratio of probabilities
-  return compute_theta(alpha_0, x) / p_t
+  return compute_theta(x, alpha_0) / p_t
 end
 
 

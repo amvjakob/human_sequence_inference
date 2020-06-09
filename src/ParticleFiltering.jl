@@ -1,6 +1,6 @@
 # ParticleFiltering.jl
 
-using Distributions, Pipe, JuliennedArrays
+using Distributions, JuliennedArrays
 
 include("utils.jl")
 include("UpdateRule.jl")
@@ -11,7 +11,7 @@ include("UpdateRule.jl")
 # N: number of particles
 # Nthrs: threshold number for resampling
 # updateall: whether to leak all cols or just the current one
-function ParticleFiltering(m, N, Nthrs, updateall = false)
+"""function ParticleFiltering(m, N, Nthrs, updateall = true)
 
   # set initial state
   chi_0 = Array{Float64,2}(undef, 0, 0)
@@ -49,14 +49,14 @@ function ParticleFiltering(m, N, Nthrs, updateall = false)
     Neff = inv(sum(w .^ 2))
     if Neff < Nthrs
       # resample particles based on current weights
-      # this returns a vector v of length N, 
-      # where v[i] represents the number of old particles i we keep
+      # this returns an array a of length N, 
+      # where a[i] represents the number of old particles i we keep
       particles = rand(Multinomial(N, w))
+      # map to array a, where a[i] is the index of the particle we keep
+      particles = mapreduce(x -> fill(x[1], x[2]), vcat, enumerate(particles))
 
       # transform particles to chi values
-      chi = @pipe mapreduce(x -> fill(x[1], x[2]), vcat, enumerate(particles)) |>
-                  map(p -> chi_t[p,:,:], _) |>
-                  unwrap;
+      chi = map(p -> chi_t[p,:,:], particles) |> unwrap
 
       # assign chi
       if updateall
@@ -71,9 +71,9 @@ function ParticleFiltering(m, N, Nthrs, updateall = false)
 
     # "surprise modulation"
     chi = map(
-      i -> (1 - h[i]) .* chi_t[i,:,:] + h[i] .* chi_0,
+      i -> (1 - h[i]) .* chi_t[i,:,:] .+ h[i] .* chi_0,
       eachindex(h)
-    ) |> unwrap;
+    ) |> unwrap
     
     # assign chi
     if updateall
@@ -99,8 +99,8 @@ function ParticleFiltering(m, N, Nthrs, updateall = false)
     alpha = chi_t .+ 1
 
     return map(
-        a -> compute_theta(a[:,col], x),
-        Slices(alpha, 2, 3)
+      a -> compute_theta(a[:,col], x),
+      Slices(alpha, 2, 3)
     ) .* w |> sum
   end
 
@@ -119,111 +119,198 @@ function ParticleFiltering(m, N, Nthrs, updateall = false)
     params,
     gettheta,
     getsbf,
-    "ParticleFiltering($m, $N, $Nthrs, $updateall)"
+    "ParticleFiltering(m, N, Nthrs, updateall)"
   )
-end
+end"""
 
-### particle filtering update rule with inference over m
+### particle filtering update rule
 
 # m: p_c / (1 - p_c), where p_c = probability of change
-# N: number of particles
-# Nthrs: threshold number for resampling
-# updateall: whether to leak all cols or just the current one
-function ParticleFilteringInference(m, Nparticles, Nthrs, updateall = false)
+# nparticles: number of particles
+# nthreshold: threshold number for resampling
+# prior: prior over window length
+# N: number of different elements in signal (binary = 2)
+# updateallcols: whether to update all cols or just the current one
+
+function ParticleFiltering(m::Float64, nparticles::Integer,
+  nthreshold::Integer, prior::Array{Float64,1}; 
+  N = 2, updateallcols = true)
+
+  # check argument validity
+  @assert(m >= 0)
+  @assert(sum(prior) === 1.0)
+  @assert(N >= 2)
+
   # set initial state
-  models   = Array{UpdateRule,1}(undef, 0)
-  priors_0 = Array{Float64,1}(undef, 0)
-  priors_t = Array{Float64,1}(undef, 0)
+  prior_0::Array{Float64,1} = copy(prior)
+  prior_t::Array{Array{Float64,1},1} = fill(copy(prior), nparticles)
 
-  # init state
-  function init(prior::Array{Float64,1}, N = 2)
-    models   = Array{UpdateRule,1}(undef, length(prior))
-    priors_0 = copy(prior)
-    priors_t = copy(prior)
+  # chi = alpha - 1
+  chi_0::Array{Array{Float64,2},1} = map(i -> zeros(N, N^(i-1)), eachindex(prior))
+  chi_t::Array{Array{Array{Float64,2},1},1} = fill(chi_0, nparticles) |> deepcopy
 
-    for i in 1:length(prior)
-      len = i - 1
+  # particle weights
+  w = ones(nparticles) ./ nparticles
 
-      # use uniform Dirichlet prior for each submodel
-      model = ParticleFiltering(len, Nparticles, Nthrs, updateall)
-      model.init(ones(N, N^len))
+  # whether the prior is fixed (1 for one model and 0 for the rest)
+  isfixed::Bool = findmax(prior)[1] === 1.0
 
-      models[i] = model
-    end
+
+  # reset state
+  function reset()
+
+    # reset prior
+    prior_t = fill(prior_0, nparticles) |> deepcopy
+
+    # reset chi
+    chi_t = fill(chi_0, nparticles) |> deepcopy
+
+    # reset particle weights
+    w = ones(nparticles) ./ nparticles
+
   end
 
-  # get thetas
-  function getthetas(cols::Array{<:Integer,1}, x = 1)::Array{Float64,1}
-    thetas = zeros(length(cols))
-    for i in eachindex(thetas)
-      # if col is 0 (partial window), we set it to 1 (since this col will still be unîform)
-      thetas[i] = models[i].gettheta(max(cols[i], 1), x)
+
+  # get thetas (plural) for a given particle
+  function getparticlethetas(particle::Integer, x::Integer, cols::Array{<:Integer,1})::Array{Float64}
+
+    return map(chi_t[particle], cols) do chi, col
+      # if col is 0 (partial window), we set it to 1,
+      # since this col will still be unmodified
+      c = max(col, 1)
+      # compute theta from chi
+      return compute_theta(x, chi[:,c] .+ 1)
     end
 
-    return thetas
   end
+
+
+  # get theta for a given particle
+  function getparticletheta(particle::Integer, x::Integer, cols::Array{<:Integer,1})::Float64
+    return sum(prior_t[particle] .* getparticlethetas(particle, x, cols))
+  end
+
+
+  # get Bayes Factor surprise for a given particle
+  function getparticlesbf(particle::Integer, x::Integer, cols::Array{<:Integer,1})::Float64
+    # sbf is theta_0 / theta_t
+    # theta_0 is 1 / N
+    return 1.0 / N / getparticletheta(particle, x, cols)
+  end
+
+
+  # get theta 
+  function gettheta(x::Integer, cols::Array{<:Integer,1})::Float64
+    return sum(w .* getparticletheta.(1:nparticles, x, Ref(cols)))
+  end
+
+
+  # get Bayes Factor surprise
+  function getsbf(x::Integer, cols::Array{<:Integer,1})::Float64
+    return 1.0 / N / gettheta(x, cols)
+  end
+
+
+  # get params
+  function getposterior()::Array{Float64,1}
+    return sum(w .* prior_t)
+  end
+
 
   # update state
   function update(x_t::Integer, cols::Array{<:Integer,1})
-    # get params before update
-    thetas = getthetas(cols, x_t) # this is an array of p(x_t | m) for all m
-    params_before = map(m -> m.params(), models)
 
-    # update models
-    # gamma = 1 is equivalent to "forgetting" everything
-    gammas = ones(length(models))
-    for i in eachindex(models)
-      # update model if col > 0 (ignore partial window)
-      if cols[i] > 0
-        gammas[i] = models[i].update(x_t, cols[i])
+    # update posterior
+    if !isfixed
+      for i in eachindex(prior_t)
+        prior_t[i] = prior_t[i] .* getparticlethetas(i, x_t, cols)
+        prior_t[i] = prior_t[i] ./ sum(prior_t[i])
       end
     end
 
-    # compute p_integrate and p_reset
-    p_int = priors_t .* thetas 
-    p_res = priors_0 .* thetas
+    # compute surprises
+    sbfs = getparticlesbf.(1:nparticles, x_t, Ref(cols))
+    sbf  = weighted_harmonic_mean(sbfs, w)
 
-    # normalize p_integrate and p_reset
-    p_int = p_int / sum(p_int)
-    p_res = p_res / sum(p_res)
+    # compute gammas
+    gammas = compute_gamma.(sbfs, m)
+    gamma  = compute_gamma(sbf, m)
 
-    # update prior    
-    priors_t = (1 .- gammas) .* p_int .+ gammas .* p_res
+    # update weights
+    wB = sbf ./ sbfs .* w
+    w = (1.0 - gamma) .* wB + gamma .* w
 
-    # normalize prior
-    priors_t = priors_t / sum(priors_t)
+    # sample h ~ Bernoulli(gammas)
+    h = rand.(Bernoulli.(gammas))
+
+    # compute n_eff and resample if needed
+    neff = inv(sum(w .^ 2))
+    if neff < nthreshold
+      # resample particles based on current weights
+      # this returns an array a of length Nparticles, 
+      # where a[i] represents the number of old particles i we keep
+      particles = rand(Multinomial(nparticles, w))
+      # map to array a, where a[i] is the index of the particle we keep
+      particles = mapreduce(x -> fill(x[1], x[2]), vcat, enumerate(particles))
+
+      # transform particles to chi values
+      chi = map(p -> chi_t[p], particles)
+
+      # transform particles to posterior values
+      prior_t = map(p -> prior_t[p], particles) |> deepcopy
+
+      # assign chi
+      if updateallcols
+        chi_t = deepcopy(chi)
+      else
+        chi_t .= map(chi_t, chi) do chi_particle_old, chi_particle_new
+          return map(chi_particle_old, chi_particle_new, cols) do chi_old, chi_new, col
+            # only update current column
+            col = max(col, 1)
+            chi_old[:,col] = chi_new[:,col]
+            return chi_old
+          end
+        end
+      end
+
+      # reset weights to uniform
+      w = ones(nparticles) ./ nparticles
+    end
+
+    # surprise modulation
+    chi = map((hval, chi) -> (1 - hval) .* chi .+ hval .* chi_0, h, chi_t)
+
+    # assign chi
+    if updateallcols
+      chi_t = deepcopy(chi)
+    else
+      for i in eachindex(chi_t)
+        for j in eachindex(chi_t[i])
+          col = max(cols[j], 1)
+          chi_t[i][j][:,col] .= chi[i][j][:,col]
+        end
+      end
+    end
+
+    # update chi_t
+    for j in eachindex(cols)
+      if cols[j] > 0
+        for i in eachindex(chi_t)
+          chi_t[i][j][x_t + 1, cols[j]] += 1
+        end          
+      end
+    end
+
   end
 
-  # get params
-  function params()
-    return map(m -> m.params(), models), priors_t
-  end
-
-  # compute theta
-  function gettheta(cols::Array{<:Integer,1}, x = 1)::Float64
-    return sum(priors_t .* getthetas(cols, x))
-  end
-
-  # compute surprise
-  function getsbfs(x_t::Integer, cols::Array{<:Integer,1})::Array{Float64,1}
-    return map(
-      i -> models[i].getsbf(x_t,max(cols[i],1)),
-      eachindex(models)
-    )
-  end
-
-  function getsbf(x_t::Integer, cols::Array{<:Integer,1})::Float64
-    return sum(priors_t .* getsbfs(x_t, cols))
-  end
 
   return UpdateRule(
-    updateall,
-    init,
-    update,
-    params,
+    reset,
     gettheta,
     getsbf,
-    "ParticleFilteringInference($m, $Nparticles, $Nthrs, $updateall)"
+    getposterior,
+    update,
+    updateallcols,
+    "PartFiltering($m, $nparticles, $nthreshold, $prior, $updateallcols)"
   )
 end
-
