@@ -1,2 +1,7 @@
 # editor files
 .idea
+
+src/ckpt/*
+src/rss/*
+src/rss_raw/*
+src/rss_block/*
