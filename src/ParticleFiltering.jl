@@ -1,140 +1,29 @@
 # ParticleFiltering.jl
 
-using Distributions, JuliennedArrays
+using Distributions
 
-include("utils.jl")
 include("UpdateRule.jl")
+include("utils.jl")
 
-### particle filtering
 
-# m: p_c / (1 - p_c), where p_c = probability of change
-# N: number of particles
-# Nthrs: threshold number for resampling
-# updateall: whether to leak all cols or just the current one
-"""function ParticleFiltering(m, N, Nthrs, updateall = true)
+"""
+    ParticleFiltering(m, nparticles, nthreshold, prior; N = 2, updateallcols = true) -> UpdateRule
 
-  # set initial state
-  chi_0 = Array{Float64,2}(undef, 0, 0)
-  chi_t = Array{Float64,3}(undef, N, 0, 0)
-  w = ones(N) ./ N
+Create a new particle filtering learning rule, with change factor `m`
+(where ``m = \\frac{p_c}{1 - p_c}`` and ``p_c`` is the probability of
+change), `nparticles` particles, sampling threshold number `nthreshold`
+and prior over different window lengths `prior`. 
 
-  # init state state
-  function init(alpha_0::Array{Float64,2})
-    # chi_t is N x 2 x 2^m, m = window length
-    chi_0 = copy(alpha_0 .- 1)
-    chi_t = fill(copy(alpha_0 .- 1), N) |> unwrap
-  end
-
-  # update state
-  function update(x_t::Integer, col::Integer)
-    # compute surprises
-    sbfs = map(
-      c -> compute_sbf(x_t, chi_0[:,col] .+ 1, c[:,col] .+ 1),
-      Slices(chi_t, 2, 3)
-    )
-    sbf = weighted_harmonic_mean(sbfs, w)
-
-    # compute gammas
-    gammas = compute_gamma.(sbfs, m)
-    gamma  = compute_gamma(sbf, m)
-
-    # update weights
-    wB = sbf ./ sbfs .* w
-    w = (1.0 - gamma) .* wB + gamma .* w
-
-    # sample h ~ Bernoulli(gammas)
-    h = rand.(Bernoulli.(gammas))
-
-    # compute N_eff and resample if needed
-    Neff = inv(sum(w .^ 2))
-    if Neff < Nthrs
-      # resample particles based on current weights
-      # this returns an array a of length N, 
-      # where a[i] represents the number of old particles i we keep
-      particles = rand(Multinomial(N, w))
-      # map to array a, where a[i] is the index of the particle we keep
-      particles = mapreduce(x -> fill(x[1], x[2]), vcat, enumerate(particles))
-
-      # transform particles to chi values
-      chi = map(p -> chi_t[p,:,:], particles) |> unwrap
-
-      # assign chi
-      if updateall
-        chi_t = chi
-      else
-        chi_t[:,:,col] = chi[:,:,col]
-      end
-
-      # reset weights to uniform
-      w = ones(N) ./ N
-    end
-
-    # "surprise modulation"
-    chi = map(
-      i -> (1 - h[i]) .* chi_t[i,:,:] .+ h[i] .* chi_0,
-      eachindex(h)
-    ) |> unwrap
-    
-    # assign chi
-    if updateall
-      chi_t = chi
-    else
-      chi_t[:,:,col] = chi[:,:,col]
-    end
-
-    # update chi_t
-    chi_t[:, x_t + 1, col] .+= 1
-
-    # return surprise-modulated learning rate
-    return gamma
-  end
-
-  # get state
-  function params()
-    return chi_t .+ 1, w
-  end
-
-  # compute theta
-  function gettheta(col::Integer, x = 1)::Float64
-    alpha = chi_t .+ 1
-
-    return map(
-      a -> compute_theta(a[:,col], x),
-      Slices(alpha, 2, 3)
-    ) .* w |> sum
-  end
-
-  # compute surprise
-  function getsbf(x_t::Integer, col::Integer)
-    alpha = chi_t .+ 1
-    alpha_t = map(a -> a[:,col], Slices(alpha, 2, 3))
-
-    return compute_sbf(x_t, chi_0[:,col] .+ 1, alpha_t, w)
-  end
-
-  return UpdateRule(
-    updateall,
-    init,
-    update,
-    params,
-    gettheta,
-    getsbf,
-    "ParticleFiltering(m, N, Nthrs, updateall)"
-  )
-end"""
-
-### particle filtering update rule
-
-# m: p_c / (1 - p_c), where p_c = probability of change
-# nparticles: number of particles
-# nthreshold: threshold number for resampling
-# prior: prior over window length
-# N: number of different elements in signal (binary = 2)
-# updateallcols: whether to update all cols or just the current one
-
-function ParticleFiltering(m::Float64, nparticles::Integer,
-  nthreshold::Integer, prior::Array{Float64,1}; 
-  N = 2, updateallcols = true)
+Optionally, `N` represents the number of different elements in the 
+signal to be decoded and `updateallcols` represents whether to leak
+the entire state or just the one  corresponding to the current observation.
+"""
+function ParticleFiltering(m::Float64,
+                           nparticles::Integer,
+                           nthreshold::Integer,
+                           prior::Array{Float64,1};
+                           N = 2,
+                           updateallcols = true)
 
   # check argument validity
   @assert(m >= 0)
@@ -243,11 +132,11 @@ function ParticleFiltering(m::Float64, nparticles::Integer,
     # sample h ~ Bernoulli(gammas)
     h = rand.(Bernoulli.(gammas))
 
-    # compute n_eff and resample if needed
+    # compute neff and resample if needed
     neff = inv(sum(w .^ 2))
     if neff < nthreshold
       # resample particles based on current weights
-      # this returns an array a of length Nparticles, 
+      # this returns an array a of length nparticles, 
       # where a[i] represents the number of old particles i we keep
       particles = rand(Multinomial(nparticles, w))
       # map to array a, where a[i] is the index of the particle we keep

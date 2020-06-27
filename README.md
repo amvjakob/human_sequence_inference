@@ -6,5 +6,10 @@ Under the supervision of Alireza Modirshanechi, Laboratory of Computational Neur
 
 ## Structure
 
-`src` Julia source files
+- `src` Julia source files
 
+- `src/notebooks` Jupyter Notebooks with the main analysis
+
+- `test` Test sequences and expected surprise values
+
+- `slides` Presentation slides

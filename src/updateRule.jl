@@ -1,51 +1,87 @@
 # UpdateRule.jl
 
-using LaTeXStrings
 
-include("utils.jl")
+"""
+    Callback(fn::F, returntype::R)
 
-### callback struct
+Creates a new callback based on the function `fn` expected to
+return elements of type `returntype`.
+"""
+struct Callback{F,R}
+  """
+    run(rule, x, cols) -> R
 
-# A Callback object is basically a wrapper around a function
-# F: type of wrapped function
-# R: return type of wrapped function
-mutable struct Callback{F,R}
-  # wrapped function
+  Run the callback function on the update rule `rule`, based on
+  the observation `x` and the past observations encoded in `cols`.
+  """
   run::F
 
-  # constructor
   function Callback(fun::F, R) where F
     return new{F,R}(fun)
   end
 end
 
 
-### update rule
+"""
+    UpdateRule(reset, gettheta, getsbf, getposterior, update, updateallcols, str)
 
-# An UpdateRule object represents a learning rule
-mutable struct UpdateRule{R,T,S,P,U}
-    # function that initializes inital parameters
+Creates a new learning rule with the given parameters.
+
+# Arguments
+
+- `reset()`
+
+Reset the internal state of the learning rule to its inital value.
+
+
+- `gettheta(x, cols)`
+
+Get the expected value of the probability of observing `x` given the 
+past observations contained in `cols`. `cols` is an array of column 
+indices corresponding to the past observations, where each array
+element corresponds to a certain window length.
+
+
+- `getsbf(x, cols)`
+
+Get the Bayes Factor surprise of observing `x` given the past
+observations contained in `cols`. `cols` is an array of column 
+indices corresponding to the past observations, where each array
+element corresponds to a certain window length.
+
+
+- `getposterior()`
+
+Get the posterior probability over different window lengths.
+
+
+- `update(x, cols)`
+
+Update the state of the learning rule by observing `x` given the 
+past observations contained in `cols`. `cols` is an array of column 
+indices corresponding to the past observations, where each array
+element corresponds to a certain window length.
+
+
+- `updateallcols::Bool`
+
+A flag that indicates whether to update the whole internal state or
+just the state corresponding to the past observations.
+
+
+- `str`
+
+Name of the update rule.
+"""
+struct UpdateRule{R,T,S,P,U}
   reset::R
 
-  # function that computes theta
   gettheta::T
-
-  # function that computes the Bayes Factor surprise
   getsbf::S
-
-  # function that returns the posterior
   getposterior::P
 
-  # function that updates the current parameters
   update::U  
 
-  # flag that indicates whether to update all parameters
-  # or just the current column
   updateallcols::Bool
-
-  # name of the update rule (useful for graphs)
   str
 end
-
-
-

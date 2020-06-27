@@ -1,6 +1,7 @@
 # editor files
 .idea
 
-src/ckpt/*
-src/rss/*
-src/rss_*
+# ckpt and rss files
+src/notebooks/ckpt/*
+src/notebooks/rss/*
+src/notebooks/rss_*

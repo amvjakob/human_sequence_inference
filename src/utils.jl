@@ -1,5 +1,6 @@
 # utils.jl
-using SpecialFunctions
+
+using Dates, SpecialFunctions
 
 ### log to console and immediately show
 function lg(x...)
@@ -8,12 +9,14 @@ function lg(x...)
 end
 
 
-### ln range
+### ln range between x1 and x2
+# sequence might not be n elements long
 function lnrange(x1::Integer, x2::Integer, n::Integer)
   return unique(round(Int, Base.MathConstants.e^y) for y in range(x1, x2, length=n))
 end
 
-### log2 range
+### log2 range between x1 and x2
+# sequence will be n elements long
 function log2range(x1::Integer, x2::Integer, n::Integer)
   N = n
   rng(s,e,l) = unique(round(Int, 2^y) for y in range(x1, x2, length=n))
@@ -23,13 +26,15 @@ function log2range(x1::Integer, x2::Integer, n::Integer)
   return rng(x1,x2,n)
 end
 
-### log10 range
+### log10 range between x1 and x2
+# sequence might not be n elements long
 function logrange(x1::Integer, x2::Integer, n::Integer)
   return unique(round(Int, 10^y) for y in range(x1, x2, length=n))
 end
 
 
 ### unwraps an array of arrays to a multidimensional array
+# default (return input array)
 function unwrap(a::Array{T,N}) where {T <: Real, N}
   return a
 end
@@ -47,6 +52,8 @@ function unwrap(a::Array{Array{T,1},2}) where T <: Real
   return result
 end
 
+# TODO: rename to unwrap?
+# unwrap an array of arrays of arrays
 function unwrap_outer(a::Array{Array{T,N},1}) where {T <: AbstractArray, N}
   shape = pushfirst!(collect(1:N), N+1) 
   return permutedims(cat(a..., dims=N+1), shape)
@@ -58,20 +65,21 @@ function compute_gamma(surprise::Float64, m::Real)
 end
 
 
-### compute the probability of x for a Dirichlet distribution
+### compute the expected probability of x for a Dirichlet distribution
 # alpha: Dirichlet distribution parameters, array of length N
-# x: observation for which to compute E[theta]
+# x:     observation for which to compute E[theta]
 function compute_theta(x::Integer, alpha::Array{Float64,1})
   # validity checks
   @assert(length(alpha) > 1)
   @assert(0 <= x < length(alpha))
 
+  # x+1 because arrays are 1-indexed
   return alpha[x + 1] / sum(alpha)
 end
 
 
-### compute "Bayes Factor surprise" for observation x under current belief
-# x: current observation, integer \in [0, N-1]
+### compute Bayes Factor surprise for observation x under current belief
+# x:       current observation, integer ∈ [0, N-1]
 # alpha_0: initial belief, array of length N
 # alpha_t: current belief, array of length N
 function compute_sbf(x::Integer,
@@ -85,8 +93,10 @@ function compute_sbf(x::Integer,
   return compute_theta(x, alpha_0) / compute_theta(x, alpha_t)
 end
 
+# TODO: needed?
+# Bayes Factor surprise for particle filtering
 # alpha_t: current belief, array of length P, each containing an array of length N
-# w_t: particle weights, array of length P
+# w_t:     particle weights, array of length P
 function compute_sbf(x::Integer,
                     alpha_0::Array{Float64,1},
                     alpha_t::Array{Array{Float64,1},1},
@@ -149,7 +159,6 @@ function ln_beta_fn(alpha::Array{Float64,1})
   return sum(loggamma.(alpha)) - loggamma(sum(alpha))
 end
 
-# alpha: array of length L
 function beta_fn(alpha::Array{Float64,1})
   return exp(ln_beta_fn(alpha))
 end

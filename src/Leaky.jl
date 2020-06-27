@@ -1,25 +1,33 @@
 # Leaky.jl
 
-include("utils.jl")
 include("UpdateRule.jl")
+include("utils.jl")
 
-### leaky integration
 
-# w: leak factor
-# prior: prior over window length
-# N: number of different elements in signal (binary = 2)
-# leakprior: whether to leak prior 
-# updateallcols: whether to leak all cols or just the current one
+"""
+    Leaky(w, prior; N = 2, leakprior = false, updateallcols = false) -> UpdateRule
 
-function Leaky(w::Union{Integer,Float64}, prior::Array{Float64,1}; 
-  N = 2, leakprior = false, updateallcols = false)
+Create a new leaky integration learning rule, with leak factor `w` 
+(where `w = Inf` is perfect integration) and prior over different window 
+lengths `prior`. 
+
+Optionally, `N` represents the number of different elements in the 
+signal to be decoded, `leakprior` represents whether to also "leak"
+the prior and `updateallcols` represents whether to leak the entire
+state or just the one corresponding to the current observation.
+"""
+function Leaky(w::Union{Integer,Float64},
+               prior::Array{Float64,1}; 
+               N = 2,
+               leakprior = false,
+               updateallcols = false)
 
   # check argument validity
   @assert(w > 0)
   @assert(sum(prior) === 1.0)
   @assert(N >= 2)
 
-  # inital state of prior is simply copy
+  # inital state of prior is simply a copy of the provided argument
   prior_t::Array{Float64,1} = copy(prior)
   
   # chi is alpha - 1
