@@ -17,4 +17,4 @@ Under the supervision of Alireza Modirshanechi, Laboratory of Computational Neur
 
 ## Dataset
 
-Dataset taken from [https://doi.org/10.7554/eLife.41541.016](Maheu M, Dehaene S, Meyniel F. Brain signatures of a multiscale process of sequence learning in humans. Elife. 2019;8:e41541).
+Dataset taken from [Maheu M, Dehaene S, Meyniel F. Brain signatures of a multiscale process of sequence learning in humans. Elife. 2019;8:e41541](https://doi.org/10.7554/eLife.41541.016).
