@@ -1,5 +1,6 @@
 # editor files
 .idea
+.vscode
 
 # ckpt and rss files
 src/notebooks/ckpt/*
